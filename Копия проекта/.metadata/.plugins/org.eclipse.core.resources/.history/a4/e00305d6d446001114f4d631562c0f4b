@@ -1,0 +1,14 @@
+# Root component dependencies
+dependencies:
+  idf:
+    version: ">=5.0"
+  protocol_examples_common:
+    path: ${IDF_PATH}/examples/common_components/protocol_examples_common
+  espressif/esp_mqtt_client:
+    version: "^2.0.0"
+  espressif/cJSON:
+    version: "^1.0.0"
+
+description: "Sensor Hub project for ESP32-S3 with MQTT support"
+url: "https://github.com/Nickreto/ProjectSensorTeam1"
+version: "1.0.0"

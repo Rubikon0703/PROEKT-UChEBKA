@@ -1,0 +1,96 @@
+menu "Sensor Hub Configuration"
+
+config SENSOR_SIMULATION_MODE
+    bool "Enable sensor simulation mode"
+    default n
+    help
+      When enabled, sensors generate fake data instead of reading 
+      from real hardware. Useful for testing without physical sensors.
+
+config SENSOR_MQTT_BROKER_URI
+    string "MQTT broker URI"
+    default "ssl://test.mosquitto.org:8883"
+    help
+      Full URI of the MQTT broker including protocol prefix.
+      Examples:
+        ssl://test.mosquitto.org:8883
+        mqtt://broker.hivemq.com:1883
+        ws://mqtt.eclipseprojects.io:80/mqtt
+
+config SENSOR_MQTT_CLIENT_ID
+    string "MQTT client ID"
+    default "esp32_sensor_hub"
+    help
+      Unique identifier for this device on the MQTT broker.
+      Should be unique per device.
+
+config SENSOR_MQTT_PUBLISH_TOPIC
+    string "MQTT publish topic"
+    default "sensors/data"
+    help
+      Topic where sensor data will be published.
+
+config SENSOR_MQTT_STATUS_TOPIC
+    string "MQTT status topic"
+    default "sensors/status"
+    help
+      Topic for online/offline status messages.
+
+config SENSOR_READ_INTERVAL_MS
+    int "Sensor read interval (milliseconds)"
+    default 2000
+    range 500 60000
+    help
+      How often to read sensors and publish data.
+
+config SENSOR_PIN_TRIG
+    int "HC-SR04 TRIG pin"
+    default 40
+    range 0 48
+
+config SENSOR_PIN_ECHO
+    int "HC-SR04 ECHO pin"
+    default 41
+    range 0 48
+
+config SENSOR_PIN_OW
+    int "DS18B20 1-Wire pin"
+    default 14
+    range 0 48
+
+config SENSOR_I2C_SDA
+    int "I2C SDA pin (BH1750)"
+    default 8
+    range 0 48
+
+config SENSOR_I2C_SCL
+    int "I2C SCL pin (BH1750)"
+    default 7
+    range 0 48
+
+config SENSOR_SPI_SCLK
+    int "SPI SCLK pin (RC522)"
+    default 12
+    range 0 48
+
+config SENSOR_SPI_MISO
+    int "SPI MISO pin (RC522)"
+    default 13
+    range 0 48
+
+config SENSOR_SPI_MOSI
+    int "SPI MOSI pin (RC522)"
+    default 11
+    range 0 48
+
+config SENSOR_SPI_CS
+    int "SPI CS pin (RC522)"
+    default 10
+    range 0 48
+
+config SENSOR_SPI_RST
+    int "SPI RST pin (RC522)"
+    default 9
+    range 0 48
+
+endmenu

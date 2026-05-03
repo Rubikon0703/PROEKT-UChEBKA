@@ -1,0 +1,35 @@
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "esp_err.h"
+
+#ifndef SIMULATION_MODE
+#define SIMULATION_MODE 0
+#endif
+
+// Пины
+#define PIN_TRIG 40
+#define PIN_ECHO 41
+#define PIN_OW   14
+#define I2C_SDA  8
+#define I2C_SCL  7
+#define SPI_SCLK 12
+#define SPI_MISO 13
+#define SPI_MOSI 11
+#define SPI_CS   10
+#define SPI_RST  9
+
+typedef struct {
+    float temperature;
+    float light;
+    float distance;
+    bool rfid_detected;
+    uint32_t rfid_uid;
+    uint64_t timestamp_ms;
+} sensor_data_t;
+
+esp_err_t sensors_init(void);
+esp_err_t sensors_read(sensor_data_t *out);
+bool sensors_rfid_present(void);
+void sensors_deinit(void);

@@ -1,0 +1,16 @@
+# Component-specific dependencies
+dependencies:
+  idf:
+    version: ">=5.0"
+dependencies:
+    espressif/esp_mqtt: "^2.0.0"
+    espressif/cJSON: "^1.0.0"
+    protocol_examples_common:
+    path: ${IDF_PATH}/examples/common_components/protocol_examples_common
+
+description: "Main component for Sensor Hub"
+targets:
+  - esp32
+  - esp32s2
+  - esp32s3
+  - esp32c3

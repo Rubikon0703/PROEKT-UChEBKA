@@ -1,0 +1,9 @@
+#include "network.h"
+#include "esp_netif.h"
+
+bool network_is_connected(void) {
+    esp_netif_ip_info_t ip;
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!netif) netif = esp_netif_get_handle_from_ifkey("ETH_DEF");
+    return (netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0);
+}

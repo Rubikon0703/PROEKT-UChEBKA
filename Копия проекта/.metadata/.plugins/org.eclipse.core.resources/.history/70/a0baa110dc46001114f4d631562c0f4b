@@ -1,0 +1,13 @@
+# Root CMakeLists.txt for Sensor Hub project
+cmake_minimum_required(VERSION 3.16)
+
+# Include ESP-IDF project setup
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# Project name
+project(sensor_hub)
+
+# Set default target if not specified
+if(NOT CONFIG_IDF_TARGET)
+    set(CONFIG_IDF_TARGET "esp32s3")
+endif()

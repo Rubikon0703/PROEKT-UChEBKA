@@ -1,0 +1,164 @@
+#include "sensors.h"
+#include <stdlib.h>
+#include <string.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
+#include "driver/i2c_master.h"
+#include "driver/spi_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "sensors";
+static i2c_master_dev_handle_t bh1750_dev = NULL;
+static spi_device_handle_t spi_dev = NULL;
+static uint32_t sim_counter = 0;
+
+// === СИМУЛЯЦИЯ ===
+#if SIMULATION_MODE
+static float sim_val(float base, float delta) {
+    return base + ((rand() % (int)(delta * 200)) - delta * 100) / 100.0f;
+}
+static float bh1750_read_lux(void) { sim_counter++; return sim_val(450.0f, 0.5f); }
+static float hc_sr04_read_cm(void) { float v = sim_val(15.0f, 0.15f); return v > 1.0f ? v : 1.0f; }
+static bool rc522_check_card(void) { sim_counter++; return (sim_counter % 5 == 0); }
+static float ds18b20_read_temp(void) { return sim_val(25.0f, 0.1f); }
+#else
+// === РЕАЛЬНЫЕ ДАТЧИКИ ===
+
+static float bh1750_read_lux(void) {
+    uint8_t cmd = 0x10;
+    if (i2c_master_transmit(bh1750_dev, &cmd, 1, 100) != ESP_OK) return -1.0f;
+    vTaskDelay(pdMS_TO_TICKS(180));
+    uint8_t buf[2];
+    if (i2c_master_receive(bh1750_dev, buf, 2, 100) != ESP_OK) return -1.0f;
+    return ((buf[0] << 8) | buf[1]) / 1.2f;
+}
+
+static float hc_sr04_read_cm(void) {
+    gpio_set_level(PIN_TRIG, 0); esp_rom_delay_us(2);
+    gpio_set_level(PIN_TRIG, 1); esp_rom_delay_us(10);
+    gpio_set_level(PIN_TRIG, 0);
+
+    int to = 0;
+    while (!gpio_get_level(PIN_ECHO) && to++ < 30000) esp_rom_delay_us(1);
+    if (to >= 30000) return -1.0f;
+    int64_t start = esp_timer_get_time();
+    to = 0;
+    while (gpio_get_level(PIN_ECHO) && to++ < 30000) esp_rom_delay_us(1);
+    int64_t dur = esp_timer_get_time() - start;
+    return (dur > 0 && dur < 38000) ? (float)dur * 0.0343f / 2.0f : -1.0f;
+}
+
+static void rc522_write(uint8_t reg, uint8_t val) {
+    spi_transaction_t t = {.flags=SPI_TRANS_USE_TXDATA, .length=16};
+    t.tx_data[0] = (reg << 1) & 0x7E; t.tx_data[1] = val;
+    spi_device_polling_transmit(spi_dev, &t);
+}
+static uint8_t rc522_read(uint8_t reg) {
+    spi_transaction_t t = {.flags=SPI_TRANS_USE_TXDATA|SPI_TRANS_USE_RXDATA, .length=16};
+    t.tx_data[0] = ((reg << 1) & 0x7E) | 0x80; t.tx_data[1] = 0;
+    spi_device_polling_transmit(spi_dev, &t);
+    return t.rx_data[1];
+}
+static bool rc522_check_card(void) {
+    uint8_t v = rc522_read(0x37);
+    return (v == 0x91 || v == 0x92 || v == 0x12);
+}
+
+static void ow_reset(void) {
+    gpio_set_direction(PIN_OW, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_OW, 0); esp_rom_delay_us(480);
+    gpio_set_level(PIN_OW, 1); esp_rom_delay_us(70);
+    gpio_set_direction(PIN_OW, GPIO_MODE_INPUT);
+    esp_rom_delay_us(410);
+}
+static void ow_write_bit(int b) {
+    gpio_set_direction(PIN_OW, GPIO_MODE_OUTPUT);
+    if (b) { gpio_set_level(PIN_OW, 0); esp_rom_delay_us(6); gpio_set_level(PIN_OW, 1); esp_rom_delay_us(64); }
+    else { gpio_set_level(PIN_OW, 0); esp_rom_delay_us(60); gpio_set_level(PIN_OW, 1); esp_rom_delay_us(10); }
+}
+static int ow_read_bit(void) {
+    int r;
+    gpio_set_direction(PIN_OW, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_OW, 0); esp_rom_delay_us(2);
+    gpio_set_level(PIN_OW, 1); gpio_set_direction(PIN_OW, GPIO_MODE_INPUT);
+    esp_rom_delay_us(8); r = gpio_get_level(PIN_OW); esp_rom_delay_us(60);
+    return r;
+}
+static void ow_write_byte(uint8_t b) { for(int i=0;i<8;i++) ow_write_bit(b & (1<<i)); }
+static uint8_t ow_read_byte(void) { uint8_t b=0; for(int i=0;i<8;i++) if(ow_read_bit()) b|=(1<<i); return b; }
+
+static float ds18b20_read_temp(void) {
+    ow_reset(); ow_write_byte(0xCC); ow_write_byte(0x44);
+    vTaskDelay(pdMS_TO_TICKS(800));
+    ow_reset(); ow_write_byte(0xCC); ow_write_byte(0xBE);
+    uint8_t d[9]; for(int i=0;i<9;i++) d[i] = ow_read_byte();
+    return ((int16_t)((d[1]<<8)|d[0])) * 0.0625f;
+}
+#endif
+
+esp_err_t sensors_init(void) {
+    ESP_LOGI(TAG, "Init (SIM=%d)", SIMULATION_MODE);
+    srand(esp_timer_get_time());
+#if !SIMULATION_MODE
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL<<PIN_TRIG)|(1ULL<<PIN_ECHO)|(1ULL<<PIN_OW),
+        .mode = GPIO_MODE_INPUT_OUTPUT, .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE
+    };
+    ESP_ERROR_CHECK(gpio_config(&io));
+    gpio_set_direction(PIN_TRIG, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_ECHO, GPIO_MODE_INPUT);
+
+    i2c_master_bus_config_t i2c_cfg = {
+        .clk_source = I2C_CLK_SRC_DEFAULT, .i2c_port = I2C_NUM_0,
+        .scl_io_num = I2C_SCL, .sda_io_num = I2C_SDA,
+        .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true
+    };
+    i2c_master_bus_handle_t bus;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &bus));
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = 0x23, .scl_speed_hz = 100000
+    };
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &dev_cfg, &bh1750_dev));
+
+    spi_bus_config_t spi_cfg = {
+        .mosi_io_num = SPI_MOSI, .miso_io_num = SPI_MISO, .sclk_io_num = SPI_SCLK,
+        .quadwp_io_num = GPIO_NUM_NC, .quadhd_io_num = GPIO_NUM_NC
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &spi_cfg, SPI_DMA_CH_AUTO));
+    spi_device_interface_config_t dcfg = {
+        .mode = 0, .clock_speed_hz = 1000000, .spics_io_num = SPI_CS, .queue_size = 1
+    };
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dcfg, &spi_dev));
+    gpio_set_direction(SPI_RST, GPIO_MODE_OUTPUT);
+    gpio_set_level(SPI_RST, 1);
+#endif
+    return ESP_OK;
+}
+
+esp_err_t sensors_read(sensor_data_t *out) {
+    if (!out) return ESP_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+    out->timestamp_ms = esp_timer_get_time() / 1000;
+    out->temperature = ds18b20_read_temp();
+    out->light = bh1750_read_lux();
+    out->distance = hc_sr04_read_cm();
+    out->rfid_detected = rc522_check_card();
+    if (out->rfid_detected) out->rfid_uid = (uint32_t)esp_timer_get_time();
+    return ESP_OK;
+}
+
+bool sensors_rfid_present(void) { return rc522_check_card(); }
+void sensors_deinit(void) {
+#if !SIMULATION_MODE
+    if (spi_dev) spi_bus_remove_device(spi_dev);
+    if (bh1750_dev) {
+        i2c_master_bus_handle_t bus;
+        i2c_master_get_bus_handle(I2C_NUM_0, &bus);
+        i2c_master_bus_remove_device(bus, bh1750_dev);
+    }
+    spi_bus_free(SPI2_HOST);
+#endif
+}

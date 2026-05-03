@@ -1,0 +1,57 @@
+/*
+ * Sensor Hub - Main entry point
+ * Compatible with ProjectSensorTeam1 structure
+ */
+#include <stdio.h>
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "protocol_examples_common.h"  // ← из idf_component.yml
+
+#include "sensors.h"
+#include "network.h"
+#include "mqtt_manager.h"
+
+static const char *TAG = "app";
+
+// 🔧 Настройки (можно вынести в Kconfig)
+#define SIMULATION_MODE 0
+#define MQTT_BROKER_URI "ssl://test.mosquitto.org:8883"
+#define MQTT_CLIENT_ID  "esp32_sensor_hub"
+#define MQTT_TOPIC      "sensors/data"
+
+void app_main(void) {
+    ESP_LOGI(TAG, "🚀 Sensor Hub starting (SIM=%d)", SIMULATION_MODE);
+
+    // 1. Инициализация
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    // 2. Сеть через protocol_examples_common
+    ESP_ERROR_CHECK(example_connect());
+
+    // 3. Датчики
+    ESP_ERROR_CHECK(sensors_init());
+
+    // 4. MQTT
+    ESP_ERROR_CHECK(mqtt_init(MQTT_BROKER_URI, MQTT_CLIENT_ID));
+    ESP_ERROR_CHECK(mqtt_connect());
+
+    ESP_LOGI(TAG, "✅ Ready\n");
+
+    // 🔄 Главный цикл
+    sensor_data_t data;
+    while (1) {
+        if (sensors_read(&data) == ESP_OK) {
+            ESP_LOGI(TAG, "T=%.1f°C L=%.0fLux D=%.1fcm RFID=%s",
+                     data.temperature, data.light, data.distance,
+                     data.rfid_detected ? "YES" : "NO");
+
+            if (network_is_connected()) {
+                mqtt_publish_sensor_data(&data, MQTT_TOPIC);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }

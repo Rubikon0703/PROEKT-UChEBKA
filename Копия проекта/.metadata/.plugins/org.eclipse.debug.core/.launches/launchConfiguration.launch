@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="com.espressif.idf.launch.serial.launchConfigurationType">
+    <booleanAttribute key="DFU" value="false"/>
+    <booleanAttribute key="FLASH_OVER_JTAG" value="false"/>
+    <booleanAttribute key="OPEN_SERIAL_MONITOR" value="true"/>
+    <stringAttribute key="SERIAL_MONITOR_ENCODING" value="ISO-8859-1"/>
+    <stringAttribute key="com.espressif.idf.debug.gdbjtag.openocd.jtagFlashArguments" value="-s ${OPENOCD_SCRIPTS} ${JTAG_FLASH_ARGS}"/>
+    <stringAttribute key="com.espressif.idf.launch.serial.core.dfuFlashArguments" value="${IDF_PYTHON_ENV_PATH} ${IDF_PY} dfu-flash"/>
+    <stringAttribute key="com.espressif.idf.launch.serial.core.serialFlashArguments" value="${IDF_PY} -B ${BUILD_DIR} -p ${serial_port} flash"/>
+    <stringAttribute key="org.eclipse.cdt.launch.ATTR_LOCATION" value="${IDF_PYTHON_ENV_PATH}"/>
+    <stringAttribute key="org.eclipse.cdt.launch.PROJECT_ATTR" value="PROEKT"/>
+    <stringAttribute key="org.eclipse.cdt.launch.PROJECT_BUILD_CONFIG_ID_ATTR" value="0.1928347004"/>
+    <stringAttribute key="org.eclipse.cdt.launch.WORKING_DIRECTORY" value="${workspace_loc:PROEKT}"/>
+    <booleanAttribute key="org.eclipse.debug.core.ATTR_FORCE_SYSTEM_CONSOLE_ENCODING" value="false"/>
+    <listAttribute key="org.eclipse.debug.core.MAPPED_RESOURCE_PATHS">
+        <listEntry value="/PROEKT"/>
+    </listAttribute>
+    <listAttribute key="org.eclipse.debug.core.MAPPED_RESOURCE_TYPES">
+        <listEntry value="4"/>
+    </listAttribute>
+</launchConfiguration>

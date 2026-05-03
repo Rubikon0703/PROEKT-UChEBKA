@@ -1,0 +1,141 @@
+/*
+ * app_main.c - Main application entry point
+ *
+ * Orchestrates initialization and main loop for Sensor Hub.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+/* protocol_examples_common for network setup */
+#include "protocol_examples_common.h"
+
+/* Local modules */
+#include "sensors.h"
+#include "network.h"
+#include "mqtt_manager.h"
+
+static const char *TAG = "app";
+
+/* Configuration - can be set via menuconfig */
+#ifndef CONFIG_SENSOR_MQTT_BROKER_URI
+#define MQTT_BROKER_URI "ssl://test.mosquitto.org:8883"
+#else
+#define MQTT_BROKER_URI CONFIG_SENSOR_MQTT_BROKER_URI
+#endif
+
+#ifndef CONFIG_SENSOR_MQTT_CLIENT_ID
+#define MQTT_CLIENT_ID "esp32_sensor_hub"
+#else
+#define MQTT_CLIENT_ID CONFIG_SENSOR_MQTT_CLIENT_ID
+#endif
+
+#ifndef CONFIG_SENSOR_MQTT_PUBLISH_TOPIC
+#define MQTT_PUBLISH_TOPIC "sensors/data"
+#else
+#define MQTT_PUBLISH_TOPIC CONFIG_SENSOR_MQTT_PUBLISH_TOPIC
+#endif
+
+#ifndef CONFIG_SENSOR_READ_INTERVAL_MS
+#define READ_INTERVAL_MS 2000
+#else
+#define READ_INTERVAL_MS CONFIG_SENSOR_READ_INTERVAL_MS
+#endif
+
+/*
+ * Application entry point
+ */
+void app_main(void) {
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "🚀 Sensor Hub starting");
+#if SIMULATION_MODE
+    ESP_LOGI(TAG, "   Mode: SIMULATION (fake sensor data)");
+#else
+    ESP_LOGI(TAG, "   Mode: REAL HARDWARE");
+#endif
+    ESP_LOGI(TAG, "========================================\n");
+
+    /* ========================================================
+     * STEP 1: Initialize NVS for WiFi credentials storage
+     * ======================================================== */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS error, erasing and retrying");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    /* ========================================================
+     * STEP 2: Initialize network stack
+     * ======================================================== */
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    /* Connect to WiFi/Ethernet using protocol_examples_common */
+    ESP_LOGI(TAG, "Connecting to network...");
+    ESP_ERROR_CHECK(example_connect());
+    ESP_LOGI(TAG, "✅ Network connected\n");
+
+    /* ========================================================
+     * STEP 3: Initialize sensors
+     * ======================================================== */
+    ESP_LOGI(TAG, "Initializing sensors...");
+    ESP_ERROR_CHECK(sensors_init());
+    ESP_LOGI(TAG, "✅ Sensors ready\n");
+
+    /* ========================================================
+     * STEP 4: Initialize and connect MQTT
+     * ======================================================== */
+    ESP_LOGI(TAG, "Initializing MQTT client...");
+    ESP_ERROR_CHECK(mqtt_init(MQTT_BROKER_URI, MQTT_CLIENT_ID));
+
+    ESP_LOGI(TAG, "Connecting to MQTT broker...");
+    ESP_ERROR_CHECK(mqtt_connect());
+    ESP_LOGI(TAG, "✅ MQTT connected\n");
+
+    /* ========================================================
+     * MAIN LOOP: Read sensors and publish data
+     * ======================================================== */
+    ESP_LOGI(TAG, "🔄 Starting main loop (interval: %d ms)\n", READ_INTERVAL_MS);
+
+    sensor_data_t sensor_data;
+
+    while (1) {
+        /* Read all sensors */
+        if (sensors_read(&sensor_data) == ESP_OK) {
+            /* Log to serial */
+            ESP_LOGI(TAG, "📊 Sensors: T=%.2f°C | L=%.2f Lux | D=%.2f cm | RFID=%s",
+                     sensor_data.temperature,
+                     sensor_data.light,
+                     sensor_data.distance,
+                     sensor_data.rfid_detected ? "YES" : "NO");
+
+            /* Publish via MQTT if network is up */
+            if (network_is_connected()) {
+                esp_err_t pub_ret = mqtt_publish_sensor_data(&sensor_data, MQTT_PUBLISH_TOPIC);
+                if (pub_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to publish: %d", pub_ret);
+                }
+            } else {
+                ESP_LOGW(TAG, "Network down, skipping MQTT publish");
+            }
+        } else {
+            ESP_LOGE(TAG, "❌ Failed to read sensors");
+        }
+
+        /* Wait for next cycle */
+        vTaskDelay(pdMS_TO_TICKS(READ_INTERVAL_MS));
+    }
+
+    /* Unreachable, but good practice for cleanup if loop exits */
+    mqtt_disconnect();
+    sensors_deinit();
+    example_disconnect();
+}

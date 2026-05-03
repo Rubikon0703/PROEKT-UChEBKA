@@ -1,0 +1,8 @@
+#pragma once
+#include "esp_err.h"
+#include "sensors.h"
+
+esp_err_t mqtt_init(const char *uri, const char *client_id);
+esp_err_t mqtt_connect(void);
+esp_err_t mqtt_publish_sensor_data(const sensor_data_t *data, const char *topic);
+void mqtt_disconnect(void);

@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "network.c"
+        "sensors.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        esp-tls
+        esp_event
+        nvs_flash
+        esp_netif
+        driver
+        esp_timer
+        freertos
+        protocol_examples_common
+)

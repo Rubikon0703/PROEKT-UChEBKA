@@ -1,0 +1,323 @@
+/*
+ * sensors.c - Sensor implementation for ESP-IDF v5.3
+ */
+
+#include "sensors.h"
+#include <stdlib.h>
+#include <string.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
+#include "driver/i2c_master.h"
+#include "driver/spi_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "sensors";
+
+/* Driver handles */
+static i2c_master_bus_handle_t i2c_bus = NULL;  // ← Храним handle шины
+static i2c_master_dev_handle_t bh1750_dev = NULL;
+static spi_device_handle_t spi_dev = NULL;
+__attribute__((unused)) static uint32_t sim_counter = 0;
+
+/* ============================================================================
+ * SIMULATION MODE
+ * ============================================================================ */
+#if SIMULATION_MODE
+
+static float sim_float(float base, float variance) {
+    float delta = ((float)(rand() % 200) - 100.0f) * variance / 100.0f;
+    return base + delta;
+}
+
+static float bh1750_read_lux(void) {
+    sim_counter++;
+    return sim_float(450.0f, 50.0f);
+}
+
+static float hc_sr04_read_cm(void) {
+    float val = sim_float(15.0f, 15.0f);
+    return (val > 1.0f) ? val : 1.0f;
+}
+
+static bool rc522_check_card(void) {
+    sim_counter++;
+    return (sim_counter % 5 == 0);
+}
+
+static float ds18b20_read_temp(void) {
+    return sim_float(25.0f, 1.0f);
+}
+
+/* ============================================================================
+ * REAL HARDWARE
+ * ============================================================================ */
+#else
+
+/* ---------------------- BH1750 (I2C) ---------------------- */
+static float bh1750_read_lux(void) {
+    if (bh1750_dev == NULL) return -1.0f;
+
+    uint8_t cmd = 0x10;  /* Continuous H-resolution mode */
+    esp_err_t ret = i2c_master_transmit(bh1750_dev, &cmd, 1, 100);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750: write failed (%d)", ret);
+        return -1.0f;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(180));
+
+    uint8_t buf[2] = {0};
+    ret = i2c_master_receive(bh1750_dev, buf, 2, 100);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750: read failed (%d)", ret);
+        return -1.0f;
+    }
+
+    uint16_t raw = (buf[0] << 8) | buf[1];
+    return (float)raw / 1.2f;
+}
+
+/* ---------------------- HC-SR04 (GPIO) ---------------------- */
+static float hc_sr04_read_cm(void) {
+    gpio_set_level(PIN_TRIG, 0);
+    esp_rom_delay_us(2);
+    gpio_set_level(PIN_TRIG, 1);
+    esp_rom_delay_us(10);
+    gpio_set_level(PIN_TRIG, 0);
+
+    int timeout = 0;
+    while (gpio_get_level(PIN_ECHO) == 0 && timeout < 30000) {
+        esp_rom_delay_us(1);
+        timeout++;
+    }
+    if (timeout >= 30000) return -1.0f;
+
+    int64_t start = esp_timer_get_time();
+
+    timeout = 0;
+    while (gpio_get_level(PIN_ECHO) == 1 && timeout < 30000) {
+        esp_rom_delay_us(1);
+        timeout++;
+    }
+    int64_t end = esp_timer_get_time();
+
+    int64_t duration = end - start;
+    if (duration > 0 && duration < 38000) {
+        return (float)duration * 0.0343f / 2.0f;
+    }
+    return -1.0f;
+}
+
+/* ---------------------- RC522 (SPI) ---------------------- */
+__attribute__((unused)) static void rc522_write_reg(uint8_t reg, uint8_t val) {
+    spi_transaction_t t = {
+        .flags = SPI_TRANS_USE_TXDATA,
+        .length = 16,
+        .tx_data = {0}
+    };
+    t.tx_data[0] = (reg << 1) & 0x7E;
+    t.tx_data[1] = val;
+    spi_device_polling_transmit(spi_dev, &t);
+}
+
+static uint8_t rc522_read_reg(uint8_t reg) {
+    spi_transaction_t t = {
+        .flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA,
+        .length = 16,
+        .tx_data = {0},
+        .rx_data = {0}
+    };
+    t.tx_data[0] = ((reg << 1) & 0x7E) | 0x80;
+    t.tx_data[1] = 0;
+    spi_device_polling_transmit(spi_dev, &t);
+    return t.rx_data[1];
+}
+
+static bool rc522_check_card(void) {
+    uint8_t ver = rc522_read_reg(0x37);
+    return (ver == 0x91 || ver == 0x92 || ver == 0x12);
+}
+
+/* ---------------------- DS18B20 (1-Wire) ---------------------- */
+static void ow_reset(void) {
+    gpio_set_direction(PIN_OW, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_OW, 0);
+    esp_rom_delay_us(480);
+    gpio_set_level(PIN_OW, 1);
+    gpio_set_direction(PIN_OW, GPIO_MODE_INPUT);
+    esp_rom_delay_us(70);
+    esp_rom_delay_us(410);
+}
+
+static void ow_write_bit(int bit) {
+    gpio_set_direction(PIN_OW, GPIO_MODE_OUTPUT);
+    if (bit) {
+        gpio_set_level(PIN_OW, 0);
+        esp_rom_delay_us(6);
+        gpio_set_level(PIN_OW, 1);
+        esp_rom_delay_us(64);
+    } else {
+        gpio_set_level(PIN_OW, 0);
+        esp_rom_delay_us(60);
+        gpio_set_level(PIN_OW, 1);
+        esp_rom_delay_us(10);
+    }
+}
+
+static int ow_read_bit(void) {
+    int result;
+    gpio_set_direction(PIN_OW, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_OW, 0);
+    esp_rom_delay_us(2);
+    gpio_set_level(PIN_OW, 1);
+    gpio_set_direction(PIN_OW, GPIO_MODE_INPUT);
+    esp_rom_delay_us(8);
+    result = gpio_get_level(PIN_OW);
+    esp_rom_delay_us(60);
+    return result;
+}
+
+static void ow_write_byte(uint8_t byte) {
+    for (int i = 0; i < 8; i++) {
+        ow_write_bit(byte & (1 << i));
+    }
+}
+
+static uint8_t ow_read_byte(void) {
+    uint8_t byte = 0;
+    for (int i = 0; i < 8; i++) {
+        if (ow_read_bit()) byte |= (1 << i);
+    }
+    return byte;
+}
+
+static float ds18b20_read_temp(void) {
+    ow_reset();
+    ow_write_byte(0xCC);
+    ow_write_byte(0x44);
+    vTaskDelay(pdMS_TO_TICKS(800));
+
+    ow_reset();
+    ow_write_byte(0xCC);
+    ow_write_byte(0xBE);
+
+    uint8_t data[9];
+    for (int i = 0; i < 9; i++) {
+        data[i] = ow_read_byte();
+    }
+
+    int16_t raw = (int16_t)((data[1] << 8) | data[0]);
+    return (float)raw * 0.0625f;
+}
+#endif
+
+/* ============================================================================
+ * PUBLIC API
+ * ============================================================================ */
+
+esp_err_t sensors_init(void) {
+    ESP_LOGI(TAG, "Init (SIM=%d)", SIMULATION_MODE);
+    srand((unsigned int)esp_timer_get_time());
+
+#if !SIMULATION_MODE
+    /* GPIO */
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << PIN_TRIG) | (1ULL << PIN_ECHO) | (1ULL << PIN_OW),
+        .mode = GPIO_MODE_INPUT_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_set_direction(PIN_TRIG, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_ECHO, GPIO_MODE_INPUT);
+
+    /* I2C - создаём шину и устройство */
+    i2c_master_bus_config_t i2c_cfg = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = I2C_NUM_0,
+        .scl_io_num = I2C_SCL,
+        .sda_io_num = I2C_SDA,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true
+    };
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &i2c_bus));  // ← Сохраняем bus!
+
+    i2c_device_config_t bh1750_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x23,
+        .scl_speed_hz = 100000
+    };
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus, &bh1750_cfg, &bh1750_dev));
+
+    /* SPI */
+    spi_bus_config_t spi_bus_cfg = {
+        .mosi_io_num = SPI_MOSI,
+        .miso_io_num = SPI_MISO,
+        .sclk_io_num = SPI_SCLK,
+        .quadwp_io_num = GPIO_NUM_NC,
+        .quadhd_io_num = GPIO_NUM_NC
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &spi_bus_cfg, SPI_DMA_CH_AUTO));
+
+    spi_device_interface_config_t spi_dev_cfg = {
+        .mode = 0,
+        .clock_speed_hz = 1000000,
+        .spics_io_num = SPI_CS,
+        .queue_size = 1
+    };
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &spi_dev_cfg, &spi_dev));
+
+    gpio_set_direction(SPI_RST, GPIO_MODE_OUTPUT);
+    gpio_set_level(SPI_RST, 1);
+#endif
+
+    return ESP_OK;
+}
+
+esp_err_t sensors_read(sensor_data_t *out) {
+    if (out == NULL) return ESP_ERR_INVALID_ARG;
+
+    memset(out, 0, sizeof(sensor_data_t));
+    out->timestamp_ms = esp_timer_get_time() / 1000;
+
+    out->temperature = ds18b20_read_temp();
+    out->light = bh1750_read_lux();
+    out->distance = hc_sr04_read_cm();
+    out->rfid_detected = rc522_check_card();
+
+    if (out->rfid_detected) {
+        out->rfid_uid = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFF);
+    }
+
+    return ESP_OK;
+}
+
+bool sensors_rfid_present(void) {
+    return rc522_check_card();
+}
+
+void sensors_deinit(void) {
+#if !SIMULATION_MODE
+    /* SPI cleanup */
+    if (spi_dev != NULL) {
+        spi_bus_remove_device(spi_dev);
+        spi_dev = NULL;
+    }
+
+    /* I2C cleanup - используем ПРАВИЛЬНЫЕ функции v5.3 */
+    if (bh1750_dev != NULL && i2c_bus != NULL) {
+        i2c_master_bus_rm_device(bh1750_dev);  // ← Правильная функция!
+        bh1750_dev = NULL;
+    }
+    if (i2c_bus != NULL) {
+        i2c_del_master_bus(i2c_bus);  // ← Удаляем шину
+        i2c_bus = NULL;
+    }
+
+    spi_bus_free(SPI2_HOST);
+#endif
+    ESP_LOGI(TAG, "Deinitialized");
+}

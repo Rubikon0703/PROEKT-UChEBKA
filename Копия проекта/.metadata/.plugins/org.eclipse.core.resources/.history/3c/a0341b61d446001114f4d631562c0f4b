@@ -1,0 +1,17 @@
+menu "Sensor Hub Configuration"
+    config SENSOR_SIMULATION_MODE
+        bool "Enable sensor simulation mode"
+        default n
+        help
+          Generate fake sensor data instead of reading hardware.
+    
+    config SENSOR_MQTT_BROKER_URI
+        string "MQTT broker URI"
+        default "ssl://test.mosquitto.org:8883"
+        help
+          MQTT broker address with protocol prefix.
+    
+    config SENSOR_MQTT_TOPIC
+        string "MQTT publish topic"
+        default "sensors/data"
+endmenu
