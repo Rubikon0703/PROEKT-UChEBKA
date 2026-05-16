@@ -1,12 +1,4 @@
-/*
- * sensors.h - Sensor interface header
- *
- * Provides unified API for reading multiple sensors:
- * - DS18B20 temperature sensor (1-Wire)
- * - BH1750 light sensor (I2C)
- * - HC-SR04 ultrasonic distance sensor (GPIO)
- * - RC522 RFID reader (SPI)
- */
+
 
 #pragma once
 
@@ -14,14 +6,14 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-/* Simulation mode toggle */
+
 #ifndef CONFIG_SENSOR_SIMULATION_MODE
 #define SIMULATION_MODE 0
 #else
 #define SIMULATION_MODE CONFIG_SENSOR_SIMULATION_MODE
 #endif
 
-/* Pin definitions - can be overridden via Kconfig */
+
 #ifndef CONFIG_SENSOR_PIN_TRIG
 #define PIN_TRIG 40
 #else
@@ -81,40 +73,26 @@
 #else
 #define SPI_RST CONFIG_SENSOR_SPI_RST
 #endif
+#define PIN_DOOR 15
 
-/* Data structure for sensor readings */
 typedef struct {
-    float temperature;        /**< Temperature in Celsius (DS18B20) */
-    float light;              /**< Light intensity in Lux (BH1750) */
-    float distance;           /**< Distance in centimeters (HC-SR04) */
-    bool rfid_detected;       /**< True if RFID card detected (RC522) */
-    uint32_t rfid_uid;        /**< UID of detected RFID card (placeholder) */
-    uint64_t timestamp_ms;    /**< Timestamp in milliseconds */
+    float temperature;
+    float light;
+    float distance;
+    bool rfid_detected;
+    uint32_t rfid_uid;
+    bool door_open;
+    uint64_t timestamp_ms;
 } sensor_data_t;
 
-/**
- * @brief Initialize all sensors and their communication interfaces
- *
- * @return esp_err_t ESP_OK on success, error code otherwise
- */
+
 esp_err_t sensors_init(void);
 
-/**
- * @brief Read all sensors and populate data structure
- *
- * @param out Pointer to sensor_data_t structure to fill
- * @return esp_err_t ESP_OK on success, error code otherwise
- */
+
 esp_err_t sensors_read(sensor_data_t *out);
 
-/**
- * @brief Check if RFID card is present (convenience function)
- *
- * @return true if card detected, false otherwise
- */
+
 bool sensors_rfid_present(void);
 
-/**
- * @brief Deinitialize sensors and free resources
- */
+
 void sensors_deinit(void);

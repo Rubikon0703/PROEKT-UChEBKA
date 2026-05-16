@@ -1,6 +1,4 @@
-/*
- * sensors.c - Sensor implementation for ESP-IDF v5.3
- */
+
 
 #include "sensors.h"
 #include <stdlib.h>
@@ -15,15 +13,13 @@
 
 static const char *TAG = "sensors";
 
-/* Driver handles */
-static i2c_master_bus_handle_t i2c_bus = NULL;  // ← Храним handle шины
+
+static i2c_master_bus_handle_t i2c_bus = NULL;
 static i2c_master_dev_handle_t bh1750_dev = NULL;
 static spi_device_handle_t spi_dev = NULL;
 __attribute__((unused)) static uint32_t sim_counter = 0;
 
-/* ============================================================================
- * SIMULATION MODE
- * ============================================================================ */
+
 #if SIMULATION_MODE
 
 static float sim_float(float base, float variance) {
@@ -50,16 +46,14 @@ static float ds18b20_read_temp(void) {
     return sim_float(25.0f, 1.0f);
 }
 
-/* ============================================================================
- * REAL HARDWARE
- * ============================================================================ */
+
 #else
 
 /* ---------------------- BH1750 (I2C) ---------------------- */
 static float bh1750_read_lux(void) {
     if (bh1750_dev == NULL) return -1.0f;
 
-    uint8_t cmd = 0x10;  /* Continuous H-resolution mode */
+    uint8_t cmd = 0x10;
     esp_err_t ret = i2c_master_transmit(bh1750_dev, &cmd, 1, 100);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "BH1750: write failed (%d)", ret);
@@ -213,24 +207,24 @@ static float ds18b20_read_temp(void) {
 }
 #endif
 
-/* ============================================================================
- * PUBLIC API
- * ============================================================================ */
+
 
 esp_err_t sensors_init(void) {
     ESP_LOGI(TAG, "Init (SIM=%d)", SIMULATION_MODE);
     srand((unsigned int)esp_timer_get_time());
 
 #if !SIMULATION_MODE
-    /* GPIO */
+
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_TRIG) | (1ULL << PIN_ECHO) | (1ULL << PIN_OW),
+    		.pin_bit_mask = (1ULL << PIN_TRIG) | (1ULL << PIN_ECHO) |
+    		                (1ULL << PIN_OW)   | (1ULL << PIN_DOOR),
         .mode = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_set_direction(PIN_DOOR, GPIO_MODE_INPUT);
     gpio_set_direction(PIN_TRIG, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_ECHO, GPIO_MODE_INPUT);
 
@@ -276,7 +270,10 @@ esp_err_t sensors_init(void) {
 
     return ESP_OK;
 }
+static bool read_door_state(void) {
 
+    return gpio_get_level(PIN_DOOR) == 1;
+}
 esp_err_t sensors_read(sensor_data_t *out) {
     if (out == NULL) return ESP_ERR_INVALID_ARG;
 
@@ -287,7 +284,7 @@ esp_err_t sensors_read(sensor_data_t *out) {
     out->light = bh1750_read_lux();
     out->distance = hc_sr04_read_cm();
     out->rfid_detected = rc522_check_card();
-
+    out->door_open = read_door_state();
     if (out->rfid_detected) {
         out->rfid_uid = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFF);
     }
@@ -301,19 +298,19 @@ bool sensors_rfid_present(void) {
 
 void sensors_deinit(void) {
 #if !SIMULATION_MODE
-    /* SPI cleanup */
+
     if (spi_dev != NULL) {
         spi_bus_remove_device(spi_dev);
         spi_dev = NULL;
     }
 
-    /* I2C cleanup - используем ПРАВИЛЬНЫЕ функции v5.3 */
+
     if (bh1750_dev != NULL && i2c_bus != NULL) {
-        i2c_master_bus_rm_device(bh1750_dev);  // ← Правильная функция!
+        i2c_master_bus_rm_device(bh1750_dev);
         bh1750_dev = NULL;
     }
     if (i2c_bus != NULL) {
-        i2c_del_master_bus(i2c_bus);  // ← Удаляем шину
+        i2c_del_master_bus(i2c_bus);
         i2c_bus = NULL;
     }
 

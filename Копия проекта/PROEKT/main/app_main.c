@@ -15,24 +15,25 @@ static const char *TAG = "app";
 void app_main(void) {
     ESP_LOGI(TAG, "🚀 Sensor Hub starting (MQTT DISABLED)");
 
-    // 1️⃣ Инициализация NVS и сети (WiFi/Ethernet)
+
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(example_connect());
 
-    // 2️⃣ Инициализация датчиков
+
     ESP_ERROR_CHECK(sensors_init());
 
     ESP_LOGI(TAG, "✅ System ready!");
 
-    // 🔄 Главный цикл: только чтение и логирование
+
     sensor_data_t data;
     while (1) {
         if (sensors_read(&data) == ESP_OK) {
-            ESP_LOGI(TAG, " T=%.2f°C | L=%.2fLux | D=%.2fcm | RFID=%s",
-                     data.temperature, data.light, data.distance,
-                     data.rfid_detected ? "YES" : "NO");
+        	ESP_LOGI(TAG, " T=%.2f°C | L=%.2fLux | D=%.2fcm | RFID=%s | DOOR=%s",
+        	         data.temperature, data.light, data.distance,
+        	         data.rfid_detected ? "YES" : "NO",
+        	         data.door_open ? "OPEN" : "CLOSED");
         } else {
             ESP_LOGE(TAG, "❌ Sensor read failed");
         }
